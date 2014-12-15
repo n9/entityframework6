@@ -52,6 +52,10 @@ namespace System.Data.Entity.Core.Objects
     {
         #region Fields
 
+        private const string _entityKeyParamName = "EntityKeyValue";
+
+        internal readonly AliasGenerator EntityKeyValueAliasGenerator = new AliasGenerator(_entityKeyParamName);
+
         private bool _disposed;
         private readonly IEntityAdapter _adapter;
 

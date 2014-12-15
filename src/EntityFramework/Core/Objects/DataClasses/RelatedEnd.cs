@@ -52,7 +52,6 @@ namespace System.Data.Entity.Core.Objects.DataClasses
         // ------
         // Fields
         // ------
-        private const string _entityKeyParamName = "EntityKeyValue";
 
         // The following fields are serialized.  Adding or removing a serialized field is considered
         // a breaking change.  This includes changing the field type or field name of existing
@@ -94,6 +93,9 @@ namespace System.Data.Entity.Core.Objects.DataClasses
 
         [NonSerialized]
         private string _sourceQuery;
+
+        [NonSerialized]
+        private List<string> _parameterNames;
 
         [NonSerialized]
         private IEnumerable<EdmMember> _sourceQueryParamProperties; // indicates which properties populate query parameters
@@ -430,6 +432,16 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                 targetEntityType = (EntityType)targetOSpaceTypeUsage.EdmType;
             }
 
+            var keyParamNameGen = _context.EntityKeyValueAliasGenerator; // Aliases are cached in AliasGenerator
+            _parameterNames = new List<string>();
+
+            Func<string> genParameterName = () =>
+            {
+                var parameterName = keyParamNameGen.Next();
+                _parameterNames.Add(parameterName);
+                return parameterName;
+            };
+
             StringBuilder sourceBuilder;
             if (associationMetadata.IsForeignKey)
             {
@@ -462,7 +474,6 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                     // from this owner's entity key, so KeyParam1 corresponds to the first key member, etc.
                     // We remember the order of the corresponding principal key values in the _sourceQueryParamProperties
                     // field.
-                    var keyParamNameGen = new AliasGenerator(_entityKeyParamName); // Aliases are cached in AliasGenerator
                     _sourceQueryParamProperties = principalProps;
 
                     for (var idx = 0; idx < dependentProps.Count; idx++)
@@ -475,7 +486,7 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                         sourceBuilder.Append("D.[");
                         sourceBuilder.Append(dependentProps[idx].Name);
                         sourceBuilder.Append("] = @");
-                        sourceBuilder.Append(keyParamNameGen.Next());
+                        sourceBuilder.Append(genParameterName());
                     }
                 }
                 else
@@ -497,7 +508,6 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                     AppendEntitySet(sourceBuilder, targetEntitySet, targetEntityType, ofTypeRequired);
                     sourceBuilder.Append(" AS P WHERE ");
 
-                    var keyParamNameGen = new AliasGenerator(_entityKeyParamName); // Aliases are cached in AliasGenerator
                     _sourceQueryParamProperties = dependentProps;
                     for (var idx = 0; idx < principalProps.Count; idx++)
                     {
@@ -508,7 +518,7 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                         sourceBuilder.Append("P.[");
                         sourceBuilder.Append(principalProps[idx].Name);
                         sourceBuilder.Append("] = @");
-                        sourceBuilder.Append(keyParamNameGen.Next());
+                        sourceBuilder.Append(genParameterName());
                     }
                     return sourceBuilder.ToString();
                 }
@@ -538,7 +548,7 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                 sourceBuilder.Append(_fromEndMember.Name);
                 sourceBuilder.Append("]) = ");
 
-                AppendKeyParameterRow(sourceBuilder, key.GetEntitySet(ObjectContext.MetadataWorkspace).ElementType.KeyMembers);
+                AppendKeyParameterRow(sourceBuilder, key.GetEntitySet(ObjectContext.MetadataWorkspace).ElementType.KeyMembers, genParameterName);
 
                 sourceBuilder.Append(") AS [AssociationEntry] INNER JOIN ");
 
@@ -563,12 +573,14 @@ namespace System.Data.Entity.Core.Objects.DataClasses
             var hasResults = true;
 
             // Add a parameter for each entity key value found on the key.
-            var paramNameGen = new AliasGenerator(_entityKeyParamName); // Aliases are cached in AliasGenerator
             var parameterMembers = _sourceQueryParamProperties
                                    ?? key.GetEntitySet(ObjectContext.MetadataWorkspace).ElementType.KeyMembers;
 
+            var idx = -1;
             foreach (var parameterMember in parameterMembers)
             {
+                idx++;
+
                 // Create a new ObjectParameter with the next parameter name and the next entity value.
                 // When _sourceQueryParamProperties are defined, it means we are handling a foreign key association. For an FK association,
                 // the current entity values are considered truth. Otherwise, we use EntityKey values for backwards
@@ -591,6 +603,9 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                         value = GetCurrentValueFromEntity(parameterMember);
                     }
                 }
+
+                var parameterName = _parameterNames[idx];
+
                 ObjectParameter queryParam;
                 if (null == value)
                 {
@@ -601,13 +616,13 @@ namespace System.Data.Entity.Core.Objects.DataClasses
                                                ? ((PrimitiveType)parameterEdmType).ClrEquivalentType
                                                : (ObjectContext.MetadataWorkspace.GetObjectSpaceType((EnumType)parameterEdmType)).ClrType;
 
-                    queryParam = new ObjectParameter(paramNameGen.Next(), parameterClrType);
+                    queryParam = new ObjectParameter(parameterName, parameterClrType);
                     // If any lookup value is null, the query cannot match any rows.
                     hasResults = false;
                 }
                 else
                 {
-                    queryParam = new ObjectParameter(paramNameGen.Next(), value);
+                    queryParam = new ObjectParameter(parameterName, value);
                 }
 
                 // Map the type of the key member to C-Space and explicitly specify this mapped type
@@ -632,14 +647,13 @@ namespace System.Data.Entity.Core.Objects.DataClasses
             return metaMember.GetValue(_wrappedOwner.Entity);
         }
 
-        private static void AppendKeyParameterRow(StringBuilder sourceBuilder, IList<EdmMember> keyMembers)
+        private void AppendKeyParameterRow(StringBuilder sourceBuilder, IList<EdmMember> keyMembers, Func<string> genParameterName)
         {
             sourceBuilder.Append("ROW(");
-            var keyParamNameGen = new AliasGenerator(_entityKeyParamName); // Aliases are cached in AliasGenerator
             var keyMemberCount = keyMembers.Count;
             for (var idx = 0; idx < keyMemberCount; idx++)
             {
-                var keyParamName = keyParamNameGen.Next();
+                var keyParamName = genParameterName();
                 sourceBuilder.Append("@");
                 sourceBuilder.Append(keyParamName);
                 sourceBuilder.Append(" AS ");
